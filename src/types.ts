@@ -9,6 +9,7 @@ export interface Job<T = unknown> {
   maxAttempts: number;
   createdAt: number;
   updatedAt: number;
+  scheduledAt?: number;
   result?: unknown;
   error?: string;
 }
