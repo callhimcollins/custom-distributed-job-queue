@@ -1,12 +1,15 @@
 import { getRedis } from "./redis.js";
 import { createJob, serializeJob, deserializeJob } from "./job.js";
+import { ResultStore } from "./result-store.js";
 import type { Job, JobHandler } from "./types.js";
 
 export class Queue {
   private name: string;
+  private results: ResultStore;
 
-  constructor(name: string) {
+  constructor(name: string, results?: ResultStore) {
     this.name = name;
+    this.results = results ?? new ResultStore();
   }
 
   private get queueKey() {
@@ -26,7 +29,9 @@ export class Queue {
     const result = await redis.blpop(this.queueKey, 0);
     if (!result) return null;
     const [, raw] = result;
-    return deserializeJob<T>(raw);
+    const job = deserializeJob<T>(raw);
+    await this.results.markActive(job);
+    return job;
   }
 
   async process<T = unknown>(handler: JobHandler<T>): Promise<void> {
@@ -36,10 +41,13 @@ export class Queue {
       if (!job) continue;
 
       try {
-        await handler(job);
+        const result = await handler(job);
+        await this.results.markCompleted(job, result);
         console.log(`[queue] job ${job.id} completed`);
       } catch (err) {
-        console.error(`[queue] job ${job.id} failed:`, err);
+        const message = err instanceof Error ? err.message : String(err);
+        await this.results.markFailed(job, message);
+        console.error(`[queue] job ${job.id} failed:`, message);
       }
     }
   }
