@@ -34,6 +34,16 @@ export class Queue {
     return job;
   }
 
+  /** Schedule a job to run at a specific future time */
+  async schedule<T>(type: string, payload: T, when: Date): Promise<Job<T>> {
+    const job = createJob(type, payload);
+    job.scheduledAt = when.getTime();
+    const raw = serializeJob(job);
+    const redis = getRedis();
+    await redis.zadd(this.delayedKey, job.scheduledAt, raw);
+    return job;
+  }
+
   /** Move due delayed jobs back into the main queue. sCalled before each BLPOP. */
   private async promoteDelayed(): Promise<number> {
     const redis = getRedis();
@@ -81,7 +91,7 @@ export class Queue {
     // Promote any delayed jobs that are now due
     await this.promoteDelayed();
 
-    const result = await redis.blpop(this.queueKey, 0);
+    const result = await redis.blpop(this.queueKey, 2);
     if (!result) return null;
     const [, raw] = result;
     const job = deserializeJob<T>(raw);
