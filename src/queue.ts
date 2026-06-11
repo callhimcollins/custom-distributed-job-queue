@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { getRedis } from "./redis.js";
+import { getRedis, disconnectRedis } from "./redis.js";
 import { createJob, serializeJob, deserializeJob } from "./job.js";
 import { ResultStore } from "./result-store.js";
 import type { Job, JobHandler, AddOptions } from "./types.js";
@@ -8,11 +8,21 @@ export class Queue {
   private name: string;
   private results: ResultStore;
   private maxPerSecond?: number;
+  private handlerTimeout?: number;
+  private shuttingDown = false;
 
-  constructor(name: string, options?: { results?: ResultStore; maxJobsPerSecond?: number }) {
+  constructor(name: string, options?: { results?: ResultStore; maxJobsPerSecond?: number; handlerTimeout?: number }) {
     this.name = name;
     this.results = options?.results ?? new ResultStore();
     this.maxPerSecond = options?.maxJobsPerSecond;
+    this.handlerTimeout = options?.handlerTimeout;
+  }
+
+  /** Signal the worker to stop after the current job */
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    console.log(`[queue] ${this.name} shutting down...`);
+    await disconnectRedis();
   }
 
   private get queueKey() {
@@ -34,6 +44,9 @@ export class Queue {
     return `${this.queueKey}:p${level}`;
   }
 
+
+
+
   async add<T>(type: string, payload: T, options?: AddOptions): Promise<Job<T>> {
     const redis = getRedis();
     const job = createJob(type, payload, { priority: options?.priority });
@@ -53,6 +66,9 @@ export class Queue {
     return job;
   }
 
+
+
+
   /** Schedule a job to run at a specific future time */
   async schedule<T>(type: string, payload: T, when: Date, options?: { priority?: number }): Promise<Job<T>> {
     const job = createJob(type, payload, { priority: options?.priority });
@@ -62,6 +78,9 @@ export class Queue {
     await redis.zadd(this.delayedKey, job.scheduledAt, raw);
     return job;
   }
+
+
+
 
   /** Move due delayed jobs back into the main queue. sCalled before each BLPOP. */
   private async promoteDelayed(): Promise<number> {
@@ -79,6 +98,9 @@ export class Queue {
     await pipeline.exec();
     return jobs.length;
   }
+
+
+
 
   private async retryJob<T>(job: Job<T>, error: string): Promise<void> {
     job.attempts += 1;
@@ -104,6 +126,9 @@ export class Queue {
     await redis.zadd(this.delayedKey, job.scheduledAt, serializeJob(job));
     console.log(`[queue] job ${job.id} will retry in ${delay}ms (attempt ${job.attempts}/${job.maxAttempts})`);
   }
+
+
+
 
   /** Wait until we're under the rate limit (if configured) */
   private async checkRateLimit(): Promise<void> {
@@ -134,6 +159,9 @@ export class Queue {
     }
   }
 
+
+
+
   async pop<T = unknown>(): Promise<Job<T> | null> {
     const redis = getRedis();
 
@@ -142,6 +170,9 @@ export class Queue {
 
     // Wait if we're hitting the rate limit
     await this.checkRateLimit();
+
+    // If shutting down, don't block on BLPOP
+    if (this.shuttingDown) return null;
 
     // Check priority levels 10 (highest) down to 0 (lowest)
     const priorityKeys = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((p) => this.priorityKey(p));
@@ -153,14 +184,16 @@ export class Queue {
     return job;
   }
 
+
+
+
   async process<T = unknown>(handler: JobHandler<T>): Promise<void> {
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    while (!this.shuttingDown) {
       const job = await this.pop<T>();
       if (!job) continue;
 
       try {
-        const result = await handler(job);
+        const result = await this.runWithTimeout(Promise.resolve(handler(job)));
         await this.results.markCompleted(job, result);
         console.log(`[queue] job ${job.id} completed`);
       } catch (err) {
@@ -168,8 +201,27 @@ export class Queue {
         await this.retryJob(job, message);
       }
     }
+    console.log(`[queue] ${this.name} worker exited`);
+  }
+
+  /** If handlerTimeout is set, rejects if the promise doesn't settle in time */
+  private async runWithTimeout<T>(promise: Promise<T>): Promise<T> {
+    if (!this.handlerTimeout) return promise;
+
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Handler timed out after ${this.handlerTimeout}ms`)),
+          this.handlerTimeout,
+        )
+      ),
+    ]);
   }
 }
+
+
+
 
 /** Auto-derive a dedup key from job type + payload for burst-duplicate protection */
 function autoDedupKey(type: string, payload: unknown): string {
