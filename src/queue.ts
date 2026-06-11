@@ -7,10 +7,12 @@ import type { Job, JobHandler, AddOptions } from "./types.js";
 export class Queue {
   private name: string;
   private results: ResultStore;
+  private maxPerSecond?: number;
 
-  constructor(name: string, results?: ResultStore) {
+  constructor(name: string, options?: { results?: ResultStore; maxJobsPerSecond?: number }) {
     this.name = name;
-    this.results = results ?? new ResultStore();
+    this.results = options?.results ?? new ResultStore();
+    this.maxPerSecond = options?.maxJobsPerSecond;
   }
 
   private get queueKey() {
@@ -97,11 +99,43 @@ export class Queue {
     console.log(`[queue] job ${job.id} will retry in ${delay}ms (attempt ${job.attempts}/${job.maxAttempts})`);
   }
 
+  /** Wait until we're under the rate limit (if configured) */
+  private async checkRateLimit(): Promise<void> {
+    if (!this.maxPerSecond) return;
+
+    const redis = getRedis();
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const now = Date.now();
+      const windowKey = Math.floor(now / 1000);
+      const key = `ratelimit:${this.name}:${windowKey}`;
+
+      const count = await redis.incr(key);
+      if (count === 1) {
+        // First request in this 1s window — set expiry so the key auto-cleans
+        await redis.expire(key, 2);
+      }
+
+      if (count <= this.maxPerSecond) return; // under limit, proceed
+
+      // Over limit — wait until next second + random jitter to spread workers
+      const nextSecond = (windowKey + 1) * 1000;
+      const jitter = Math.random() * 50;
+      const waitMs = nextSecond - now + jitter;
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      // Loop back and retry with the new window
+    }
+  }
+
   async pop<T = unknown>(): Promise<Job<T> | null> {
     const redis = getRedis();
 
     // Promote any delayed jobs that are now due
     await this.promoteDelayed();
+
+    // Wait if we're hitting the rate limit
+    await this.checkRateLimit();
 
     const result = await redis.blpop(this.queueKey, 2);
     if (!result) return null;
