@@ -35,7 +35,7 @@ export class Queue {
     // Derive dedup key: explicit key wins, otherwise auto-hash type + payload
     const dedupKey = options?.dedupKey ?? autoDedupKey(type, payload);
     const dedupRedisKey = `dedup:${this.name}:${dedupKey}`;
-    const ttl = options?.dedupTTL ?? (options?.dedupKey ? 86400 : 60);
+    const ttl = options?.dedupTTL ?? 60;
     const inserted = await redis.set(dedupRedisKey, job.id, "EX", ttl, "NX");
     if (inserted !== "OK") {
       console.log(`[queue] duplicate suppressed (dedup key: ${dedupKey})`);
