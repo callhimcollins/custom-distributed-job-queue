@@ -1,7 +1,8 @@
+import { createHash } from "node:crypto";
 import { getRedis } from "./redis.js";
 import { createJob, serializeJob, deserializeJob } from "./job.js";
 import { ResultStore } from "./result-store.js";
-import type { Job, JobHandler } from "./types.js";
+import type { Job, JobHandler, AddOptions } from "./types.js";
 
 export class Queue {
   private name: string;
@@ -26,10 +27,21 @@ export class Queue {
     return `dlq:${this.name}`;
   }
 
-  async add<T>(type: string, payload: T): Promise<Job<T>> {
+  async add<T>(type: string, payload: T, options?: AddOptions): Promise<Job<T>> {
     const redis = getRedis();
     const job = createJob(type, payload);
     const raw = serializeJob(job);
+
+    // Derive dedup key: explicit key wins, otherwise auto-hash type + payload
+    const dedupKey = options?.dedupKey ?? autoDedupKey(type, payload);
+    const dedupRedisKey = `dedup:${this.name}:${dedupKey}`;
+    const ttl = options?.dedupTTL ?? (options?.dedupKey ? 86400 : 60);
+    const inserted = await redis.set(dedupRedisKey, job.id, "EX", ttl, "NX");
+    if (inserted !== "OK") {
+      console.log(`[queue] duplicate suppressed (dedup key: ${dedupKey})`);
+      return job;
+    }
+
     await redis.rpush(this.queueKey, raw);
     return job;
   }
@@ -115,4 +127,12 @@ export class Queue {
       }
     }
   }
+}
+
+/** Auto-derive a dedup key from job type + payload for burst-duplicate protection */
+function autoDedupKey(type: string, payload: unknown): string {
+  const hash = createHash("md5")
+    .update(type + JSON.stringify(payload))
+    .digest("hex");
+  return `auto:${hash}`;
 }
