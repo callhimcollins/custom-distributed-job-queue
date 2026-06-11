@@ -34,6 +34,9 @@ export class Queue {
     return `${this.queueKey}:p${level}`;
   }
 
+
+
+
   async add<T>(type: string, payload: T, options?: AddOptions): Promise<Job<T>> {
     const redis = getRedis();
     const job = createJob(type, payload, { priority: options?.priority });
@@ -53,6 +56,9 @@ export class Queue {
     return job;
   }
 
+
+
+
   /** Schedule a job to run at a specific future time */
   async schedule<T>(type: string, payload: T, when: Date, options?: { priority?: number }): Promise<Job<T>> {
     const job = createJob(type, payload, { priority: options?.priority });
@@ -62,6 +68,9 @@ export class Queue {
     await redis.zadd(this.delayedKey, job.scheduledAt, raw);
     return job;
   }
+
+
+
 
   /** Move due delayed jobs back into the main queue. sCalled before each BLPOP. */
   private async promoteDelayed(): Promise<number> {
@@ -79,6 +88,9 @@ export class Queue {
     await pipeline.exec();
     return jobs.length;
   }
+
+
+
 
   private async retryJob<T>(job: Job<T>, error: string): Promise<void> {
     job.attempts += 1;
@@ -104,6 +116,9 @@ export class Queue {
     await redis.zadd(this.delayedKey, job.scheduledAt, serializeJob(job));
     console.log(`[queue] job ${job.id} will retry in ${delay}ms (attempt ${job.attempts}/${job.maxAttempts})`);
   }
+
+
+
 
   /** Wait until we're under the rate limit (if configured) */
   private async checkRateLimit(): Promise<void> {
@@ -134,6 +149,9 @@ export class Queue {
     }
   }
 
+
+
+
   async pop<T = unknown>(): Promise<Job<T> | null> {
     const redis = getRedis();
 
@@ -153,6 +171,9 @@ export class Queue {
     return job;
   }
 
+
+
+
   async process<T = unknown>(handler: JobHandler<T>): Promise<void> {
     // eslint-disable-next-line no-constant-condition
     while (true) {
@@ -170,6 +191,9 @@ export class Queue {
     }
   }
 }
+
+
+
 
 /** Auto-derive a dedup key from job type + payload for burst-duplicate protection */
 function autoDedupKey(type: string, payload: unknown): string {
