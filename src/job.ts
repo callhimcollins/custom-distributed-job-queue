@@ -5,6 +5,7 @@ export interface CreateJobOptions {
   id?: string;
   attempts?: number;
   maxAttempts?: number;
+  priority?: number;
 }
 
 export function createJob<T>(
@@ -21,6 +22,7 @@ export function createJob<T>(
     status: "queued",
     attempts: options?.attempts ?? 0,
     maxAttempts: options?.maxAttempts ?? 3,
+    priority: options?.priority ?? 5,
     createdAt: now,
     updatedAt: now,
   };

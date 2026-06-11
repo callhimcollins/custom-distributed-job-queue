@@ -29,9 +29,14 @@ export class Queue {
     return `dlq:${this.name}`;
   }
 
+  /** Redis key for a given priority level */
+  private priorityKey(level: number): string {
+    return `${this.queueKey}:p${level}`;
+  }
+
   async add<T>(type: string, payload: T, options?: AddOptions): Promise<Job<T>> {
     const redis = getRedis();
-    const job = createJob(type, payload);
+    const job = createJob(type, payload, { priority: options?.priority });
     const raw = serializeJob(job);
 
     // Derive dedup key: explicit key wins, otherwise auto-hash type + payload
@@ -44,13 +49,13 @@ export class Queue {
       return job;
     }
 
-    await redis.rpush(this.queueKey, raw);
+    await redis.rpush(this.priorityKey(job.priority), raw);
     return job;
   }
 
   /** Schedule a job to run at a specific future time */
-  async schedule<T>(type: string, payload: T, when: Date): Promise<Job<T>> {
-    const job = createJob(type, payload);
+  async schedule<T>(type: string, payload: T, when: Date, options?: { priority?: number }): Promise<Job<T>> {
+    const job = createJob(type, payload, { priority: options?.priority });
     job.scheduledAt = when.getTime();
     const raw = serializeJob(job);
     const redis = getRedis();
@@ -67,7 +72,8 @@ export class Queue {
 
     const pipeline = redis.pipeline();
     for (const raw of jobs) {
-      pipeline.rpush(this.queueKey, raw);
+      const parsed = JSON.parse(raw) as Job;
+      pipeline.rpush(this.priorityKey(parsed.priority), raw);
       pipeline.zrem(this.delayedKey, raw);
     }
     await pipeline.exec();
@@ -137,7 +143,9 @@ export class Queue {
     // Wait if we're hitting the rate limit
     await this.checkRateLimit();
 
-    const result = await redis.blpop(this.queueKey, 2);
+    // Check priority levels 10 (highest) down to 0 (lowest)
+    const priorityKeys = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((p) => this.priorityKey(p));
+    const result = await redis.blpop(priorityKeys, 2);
     if (!result) return null;
     const [, raw] = result;
     const job = deserializeJob<T>(raw);
