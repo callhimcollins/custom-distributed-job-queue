@@ -28,54 +28,53 @@ export default function App() {
     setHighlight("producer");
     for (let i = 0; i < 10; i++) {
       addJob();
-      await wait(500);
+      await wait(1000);
     }
-    await wait(1500);
+    await wait(3000);
     setStepLabel("All 10 jobs are now in the queue, waiting to be picked up by a worker.");
     setHighlight("queue");
-    await wait(2000);
+    await wait(4000);
 
     // ── Step 2: Queue → Worker (process 3) ──
     setStepLabel("Worker calls BLPOP to pull a job from the queue and processes it...");
     setHighlight("worker");
     for (let i = 0; i < 3; i++) {
       processJob();
-      await wait(2500);
+      await wait(5000);
     }
-    await wait(1500);
+    await wait(3000);
 
     // ── Step 3: Show retry → DLQ ──
     setStepLabel("Job fails! It goes to Delayed for retry...");
     setHighlight("retry");
     processJob();
-    await wait(300);
+    await wait(1000);
     failJob(); // 1/3 → delayed
-    await wait(500);
-    processJob(); await wait(1200);
-    processJob(); await wait(1200);
-    processJob(); await wait(1200);
+    await wait(1500);
+    processJob(); await wait(3500);
+    processJob(); await wait(3500);
+    processJob(); await wait(3500);
 
     setStepLabel("Job promoted back to queue after backoff timer. Let's retry...");
     setHighlight("queue");
-    await wait(3000);
+    await wait(5000);
 
     setStepLabel("Fails again! One more retry attempt...");
     setHighlight("retry");
     processJob();
-    await wait(300);
+    await wait(1000);
     failJob(); // 2/3 → delayed
-    await wait(500);
-    processJob(); await wait(1200);
-    processJob(); await wait(1200);
+    await wait(1500);
+    processJob(); await wait(3500);
+    processJob(); await wait(3500);
     setHighlight("queue");
-    await wait(3000);
+    await wait(5000);
 
     setStepLabel("Retries exhausted! Sending to Dead Letter Queue.");
     setHighlight("dlq");
-    // Directly push a DLQ entry to guarantee it's visible
     pushToDlq("a1b2", "send-email");
     pushToDlq("c3d4", "process-payment");
-    await wait(1500);
+    await wait(4000);
     setHighlight("");
     setStepLabel("");
     setLearning(false);
