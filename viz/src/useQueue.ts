@@ -57,10 +57,24 @@ export function useQueue() {
     });
   },[]);
 
+  const retryFromDlq = useCallback((jobId: string) => {
+    setState(p => {
+      const job = p.dlq.find(j => j.id === jobId);
+      if (!job) return p;
+      const revived = { ...job, attempts: 0, status: "queued" as const, promoted: true };
+      return {
+        ...p,
+        dlq: p.dlq.filter(j => j.id !== jobId),
+        queue: [...p.queue, revived],
+        logs: [...p.logs.slice(-49), log(`  ↻ job [${jobId}] retried from DLQ → queued`,"cy")],
+      };
+    });
+  },[]);
+
   const resetAll = useCallback(() => {
     timers.current.forEach(clearTimeout); timers.current=[]; idSeq=0;
     setState({queue:[],delayed:[],dlq:[],active:null,done:0,failed:0,total:0,logs:[{text:"// system reset",cls:"dim"}]});
   },[]);
 
-  return { state, addJob, processJob, failJob, resetAll };
+  return { state, addJob, processJob, failJob, retryFromDlq, resetAll };
 }
