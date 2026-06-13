@@ -71,10 +71,15 @@ export function useQueue() {
     });
   },[]);
 
+  const pushToDlq = useCallback((id: string, type: string) => {
+    const job: Job = { id, type, color:"pink", attempts:3, maxAttempts:3, status:"dlq" };
+    setState(p => ({...p, dlq:[...p.dlq, job], logs:[...p.logs.slice(-49), log(`  ☠ job [${id}] ${type} → DLQ`,"rd")]}));
+  },[]);
+
   const resetAll = useCallback(() => {
     timers.current.forEach(clearTimeout); timers.current=[]; idSeq=0;
     setState({queue:[],delayed:[],dlq:[],active:null,done:0,failed:0,total:0,logs:[{text:"// system reset",cls:"dim"}]});
   },[]);
 
-  return { state, addJob, processJob, failJob, retryFromDlq, resetAll };
+  return { state, addJob, processJob, failJob, retryFromDlq, pushToDlq, resetAll };
 }

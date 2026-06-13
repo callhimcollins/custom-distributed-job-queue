@@ -12,7 +12,7 @@ async function wait(ms: number) {
 }
 
 export default function App() {
-  const { state, addJob, processJob, failJob, retryFromDlq, resetAll } = useQueue();
+  const { state, addJob, processJob, failJob, retryFromDlq, pushToDlq, resetAll } = useQueue();
   const [highlight, setHighlight] = useState("");
   const [learning, setLearning] = useState(false);
   const [stepLabel, setStepLabel] = useState("");
@@ -44,57 +44,42 @@ export default function App() {
     }
     await wait(1500);
 
-    // ── Step 3: Fail jobs to show retry + DLQ ──
-    setStepLabel("A handler throws an error! The job is moved to the Delayed set for retry...");
+    // ── Step 3: Show retry → DLQ ──
+    setStepLabel("Job fails! It goes to Delayed for retry...");
     setHighlight("retry");
     processJob();
-    await wait(600);
+    await wait(300);
     failJob(); // 1/3 → delayed
-    await wait(600);
-    processJob();
-    await wait(600);
-    failJob(); // 1/3 → delayed
-    await wait(600);
-    processJob();
-    await wait(600);
-    failJob(); // 1/3 → delayed
-    await wait(2000);
+    await wait(500);
+    processJob(); await wait(1200);
+    processJob(); await wait(1200);
+    processJob(); await wait(1200);
 
-    setStepLabel("Delayed jobs are promoted back to the main queue after their backoff timer expires.");
+    setStepLabel("Job promoted back to queue after backoff timer. Let's retry...");
     setHighlight("queue");
     await wait(3000);
 
-    setStepLabel("The retried job is processed again but fails a second time — back to Delayed...");
+    setStepLabel("Fails again! One more retry attempt...");
     setHighlight("retry");
     processJob();
-    await wait(600);
+    await wait(300);
     failJob(); // 2/3 → delayed
-    await wait(2500);
+    await wait(500);
+    processJob(); await wait(1200);
+    processJob(); await wait(1200);
+    setHighlight("queue");
+    await wait(3000);
 
-    setStepLabel("Third attempt — this job keeps failing. One more failure and it's dead lettered.");
-    processJob();
-    await wait(600);
-    failJob(); // 3/3 → DLQ
-    await wait(1500);
-    setStepLabel("Retries exhausted! The job lands in the Dead Letter Queue for manual inspection.");
+    setStepLabel("Retries exhausted! Sending to Dead Letter Queue.");
     setHighlight("dlq");
-    await wait(2500);
-
-    // ── Step 4: Finish remaining jobs ──
-    setStepLabel("Worker continues processing the remaining jobs...");
-    setHighlight("worker");
-    for (let i = 0; i < 4; i++) {
-      processJob();
-      await wait(2500);
-    }
+    // Directly push a DLQ entry to guarantee it's visible
+    pushToDlq("a1b2", "send-email");
+    pushToDlq("c3d4", "process-payment");
     await wait(1500);
-
-    setStepLabel("Learn complete! Hover over DLQ to review dead letters and send them back to the queue — DLQ is meant for manual inspection.");
-    await wait(2000);
     setHighlight("");
     setStepLabel("");
     setLearning(false);
-  }, [learning, resetAll, addJob, processJob, failJob]);
+  }, [learning, resetAll, addJob, processJob, failJob, pushToDlq]);
 
   return (
     <div className="container">
@@ -114,7 +99,7 @@ export default function App() {
           </div>
         </div>
       )}
-      <Architecture highlight={highlight} dlq={state.dlq} onRetryDlq={retryFromDlq} />
+      <Architecture highlight={highlight} dlq={state.dlq} onRetryDlq={retryFromDlq} doneCount={state.done} />
       <Controls onAdd={addJob} onProcess={processJob} onFail={failJob} onReset={resetAll} onLearn={startLearn} learning={learning} />
       <Stats state={state} />
       <QueueVisual queue={state.queue} />
