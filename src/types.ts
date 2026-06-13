@@ -7,6 +7,7 @@ export interface Job<T = unknown> {
   status: JobStatus;
   attempts: number;
   maxAttempts: number;
+  priority: number;
   createdAt: number;
   updatedAt: number;
   scheduledAt?: number;
@@ -21,4 +22,6 @@ export interface AddOptions {
   dedupKey?: string;
   /** TTL for the dedup entry in seconds (default: 86400 = 24h) */
   dedupTTL?: number;
+  /** Priority level (0-10, default 5). Higher = processed first */
+  priority?: number;
 }
