@@ -13,10 +13,10 @@ export class Queue {
   private handlerTimeout?: number;
   private shuttingDown = false;
 
-  constructor(name: string, options?: { redis?: Redis; results?: ResultStore; maxJobsPerSecond?: number; handlerTimeout?: number }) {
+  constructor(name: string, options?: { redis?: Redis; maxJobsPerSecond?: number; handlerTimeout?: number }) {
     this.name = name;
     this.redis = options?.redis ?? getRedis();
-    this.results = options?.results ?? new ResultStore({ redis: this.redis });
+    this.results = new ResultStore({ redis: this.redis });
     this.maxPerSecond = options?.maxJobsPerSecond;
     this.handlerTimeout = options?.handlerTimeout;
   }
