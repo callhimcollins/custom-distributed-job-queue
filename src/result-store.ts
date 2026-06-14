@@ -1,12 +1,18 @@
 import { getRedis } from "./redis.js";
 import { serializeJob, deserializeJob } from "./job.js";
+import type { Redis } from "ioredis";
 import type { Job } from "./types.js";
 
 export class ResultStore {
+  private redis: Redis;
+
+  constructor(options?: { redis?: Redis }) {
+    this.redis = options?.redis ?? getRedis();
+  }
+
   async save(job: Job): Promise<void> {
-    const redis = getRedis();
     const raw = serializeJob(job);
-    await redis.hset(`job:${job.id}`, {
+    await this.redis.hset(`job:${job.id}`, {
       id: job.id,
       type: job.type,
       data: raw,
@@ -14,8 +20,7 @@ export class ResultStore {
   }
 
   async get<T = unknown>(id: string): Promise<Job<T> | null> {
-    const redis = getRedis();
-    const raw = await redis.hget(`job:${id}`, "data");
+    const raw = await this.redis.hget(`job:${id}`, "data");
     if (!raw) return null;
     return deserializeJob<T>(raw);
   }

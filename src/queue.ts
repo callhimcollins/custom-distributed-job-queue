@@ -2,18 +2,21 @@ import { createHash } from "node:crypto";
 import { getRedis, disconnectRedis } from "./redis.js";
 import { createJob, serializeJob, deserializeJob } from "./job.js";
 import { ResultStore } from "./result-store.js";
+import type { Redis } from "ioredis";
 import type { Job, JobHandler, AddOptions } from "./types.js";
 
 export class Queue {
   private name: string;
+  private redis: Redis;
   private results: ResultStore;
   private maxPerSecond?: number;
   private handlerTimeout?: number;
   private shuttingDown = false;
 
-  constructor(name: string, options?: { results?: ResultStore; maxJobsPerSecond?: number; handlerTimeout?: number }) {
+  constructor(name: string, options?: { redis?: Redis; results?: ResultStore; maxJobsPerSecond?: number; handlerTimeout?: number }) {
     this.name = name;
-    this.results = options?.results ?? new ResultStore();
+    this.redis = options?.redis ?? getRedis();
+    this.results = options?.results ?? new ResultStore({ redis: this.redis });
     this.maxPerSecond = options?.maxJobsPerSecond;
     this.handlerTimeout = options?.handlerTimeout;
   }
@@ -48,7 +51,6 @@ export class Queue {
 
 
   async add<T>(type: string, payload: T, options?: AddOptions): Promise<Job<T>> {
-    const redis = getRedis();
     const job = createJob(type, payload, { priority: options?.priority });
     const raw = serializeJob(job);
 
@@ -56,13 +58,13 @@ export class Queue {
     const dedupKey = options?.dedupKey ?? autoDedupKey(type, payload);
     const dedupRedisKey = `dedup:${this.name}:${dedupKey}`;
     const ttl = options?.dedupTTL ?? 60;
-    const inserted = await redis.set(dedupRedisKey, job.id, "EX", ttl, "NX");
+    const inserted = await this.redis.set(dedupRedisKey, job.id, "EX", ttl, "NX");
     if (inserted !== "OK") {
       console.log(`[queue] duplicate suppressed (dedup key: ${dedupKey})`);
       return job;
     }
 
-    await redis.rpush(this.priorityKey(job.priority), raw);
+    await this.redis.rpush(this.priorityKey(job.priority), raw);
     return job;
   }
 
@@ -74,8 +76,7 @@ export class Queue {
     const job = createJob(type, payload, { priority: options?.priority });
     job.scheduledAt = when.getTime();
     const raw = serializeJob(job);
-    const redis = getRedis();
-    await redis.zadd(this.delayedKey, job.scheduledAt, raw);
+    await this.redis.zadd(this.delayedKey, job.scheduledAt, raw);
     return job;
   }
 
@@ -84,12 +85,11 @@ export class Queue {
 
   /** Move due delayed jobs back into the main queue. sCalled before each BLPOP. */
   private async promoteDelayed(): Promise<number> {
-    const redis = getRedis();
     const now = Date.now();
-    const jobs = await redis.zrangebyscore(this.delayedKey, 0, now);
+    const jobs = await this.redis.zrangebyscore(this.delayedKey, 0, now);
     if (jobs.length === 0) return 0;
 
-    const pipeline = redis.pipeline();
+    const pipeline = this.redis.pipeline();
     for (const raw of jobs) {
       const parsed = JSON.parse(raw) as Job;
       pipeline.rpush(this.priorityKey(parsed.priority), raw);
@@ -111,8 +111,7 @@ export class Queue {
     if (job.attempts >= job.maxAttempts) {
       // Exhausted — send to dead letter queue
       await this.results.markFailed(job, error);
-      const redis = getRedis();
-      await redis.rpush(this.dlqKey, serializeJob(job));
+      await this.redis.rpush(this.dlqKey, serializeJob(job));
       console.warn(`[queue] job ${job.id} sent to DLQ after ${job.attempts} attempts`);
       return;
     }
@@ -122,8 +121,7 @@ export class Queue {
     job.scheduledAt = Date.now() + delay;
 
     await this.results.save(job);
-    const redis = getRedis();
-    await redis.zadd(this.delayedKey, job.scheduledAt, serializeJob(job));
+    await this.redis.zadd(this.delayedKey, job.scheduledAt, serializeJob(job));
     console.log(`[queue] job ${job.id} will retry in ${delay}ms (attempt ${job.attempts}/${job.maxAttempts})`);
   }
 
@@ -134,18 +132,16 @@ export class Queue {
   private async checkRateLimit(): Promise<void> {
     if (!this.maxPerSecond) return;
 
-    const redis = getRedis();
-
     // eslint-disable-next-line no-constant-condition
     while (true) {
       const now = Date.now();
       const windowKey = Math.floor(now / 1000);
       const key = `ratelimit:${this.name}:${windowKey}`;
 
-      const count = await redis.incr(key);
+      const count = await this.redis.incr(key);
       if (count === 1) {
         // First request in this 1s window — set expiry so the key auto-cleans
-        await redis.expire(key, 2);
+        await this.redis.expire(key, 2);
       }
 
       if (count <= this.maxPerSecond) return; // under limit, proceed
@@ -163,8 +159,6 @@ export class Queue {
 
 
   async pop<T = unknown>(): Promise<Job<T> | null> {
-    const redis = getRedis();
-
     // Promote any delayed jobs that are now due
     await this.promoteDelayed();
 
@@ -176,7 +170,7 @@ export class Queue {
 
     // Check priority levels 10 (highest) down to 0 (lowest)
     const priorityKeys = [10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0].map((p) => this.priorityKey(p));
-    const result = await redis.blpop(priorityKeys, 2);
+    const result = await this.redis.blpop(priorityKeys, 2);
     if (!result) return null;
     const [, raw] = result;
     const job = deserializeJob<T>(raw);
